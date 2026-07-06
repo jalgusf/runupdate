@@ -66,9 +66,30 @@ const PR_CAP_AMBIENT: c_int = 47;
 const PR_CAP_AMBIENT_RAISE: c_ulong = 2;
 const PR_CAP_AMBIENT_CLEAR_ALL: c_ulong = 4;
 
+// capget(2)/capset(2) data structures, version 3 (64-bit capabilities, two
+// 32-bit words). glibc exposes thin wrappers for both syscalls, so we avoid
+// architecture-specific syscall numbers.
+const LINUX_CAPABILITY_VERSION_3: u32 = 0x2008_0522;
+
+#[repr(C)]
+struct CapUserHeader {
+    version: u32,
+    pid: c_int,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
+struct CapUserData {
+    effective: u32,
+    permitted: u32,
+    inheritable: u32,
+}
+
 extern "C" {
     fn prctl(option: c_int, arg2: c_ulong, arg3: c_ulong, arg4: c_ulong, arg5: c_ulong) -> c_int;
     fn geteuid() -> u32;
+    fn capget(header: *mut CapUserHeader, data: *mut CapUserData) -> c_int;
+    fn capset(header: *const CapUserHeader, data: *const CapUserData) -> c_int;
 }
 
 /// Returns true if the process is running as (effective) root.
@@ -137,15 +158,55 @@ pub fn setcap_spec() -> Option<String> {
     }
 }
 
+/// Copy the process's permitted capability set into its inheritable set.
+///
+/// This is the crucial step that makes ambient capabilities usable. When a
+/// binary carrying file capabilities is executed, the kernel places those
+/// capabilities in the process's *permitted* (and effective) sets, but the
+/// *inheritable* set is left as whatever the parent had — for an ordinary user
+/// that is empty. `PR_CAP_AMBIENT_RAISE` refuses (with `EPERM`) to raise any
+/// capability that is not present in *both* the permitted and inheritable sets,
+/// so without this step every ambient raise fails and the `snap`/`apt` children
+/// inherit nothing.
+///
+/// Adding a capability to the inheritable set is permitted as long as it is
+/// already in the permitted set, which it is by construction here. Best-effort:
+/// returns false if the `capget`/`capset` calls fail.
+fn inherit_permitted() -> bool {
+    let mut header = CapUserHeader {
+        version: LINUX_CAPABILITY_VERSION_3,
+        pid: 0, // 0 == the calling thread
+    };
+    let mut data = [CapUserData::default(); 2];
+
+    // Safe: `header`/`data` are valid, correctly sized buffers for a version-3
+    // capget/capset call (two 32-bit words of capabilities).
+    if unsafe { capget(&mut header, data.as_mut_ptr()) } != 0 {
+        return false;
+    }
+
+    // Anything we are permitted, we also allow to be inherited across exec.
+    for word in data.iter_mut() {
+        word.inheritable |= word.permitted;
+    }
+
+    unsafe { capset(&header, data.as_ptr()) == 0 }
+}
+
 /// Attempt to raise every required capability into the ambient set so that the
 /// `snap`/`apt` child processes inherit them across `execve`.
 ///
-/// This is best-effort: when the binary carries no file capabilities (for
-/// example when the whole tool is simply run under `sudo`) the raise fails with
-/// `EPERM` and is ignored, because in that case the children already inherit
-/// full privileges from the root parent. Returns the number of capabilities
-/// successfully raised.
+/// First the permitted set is mirrored into the inheritable set (see
+/// [`inherit_permitted`]); ambient capabilities can only be raised for
+/// capabilities present in both. This whole operation is best-effort: when the
+/// binary carries no file capabilities (for example when the tool is simply run
+/// under `sudo`) there is nothing to inherit and the raises fail with `EPERM`
+/// and are ignored, because in that case the children already inherit full
+/// privileges from the root parent. Returns the number of capabilities
+/// successfully raised into the ambient set.
 pub fn raise_ambient() -> usize {
+    inherit_permitted();
+
     let mut raised = 0;
     for (_, num) in available_caps() {
         // Safe: PR_CAP_AMBIENT_RAISE only reads `arg3` (the cap number) and has

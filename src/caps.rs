@@ -36,6 +36,25 @@ pub const REQUIRED_CAPS: &[(&str, c_int)] = &[("cap_setgid", 6), ("cap_setuid", 
 // prctl(2) constant for reading the bounding set.
 const PR_CAPBSET_READ: c_int = 23;
 
+// capget(2)/capset(2) data structures, version 3 (64-bit capabilities, two
+// 32-bit words). glibc exposes thin wrappers for both syscalls, so we avoid
+// architecture-specific syscall numbers.
+const LINUX_CAPABILITY_VERSION_3: u32 = 0x2008_0522;
+
+#[repr(C)]
+struct CapUserHeader {
+    version: u32,
+    pid: c_int,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
+struct CapUserData {
+    effective: u32,
+    permitted: u32,
+    inheritable: u32,
+}
+
 extern "C" {
     fn prctl(option: c_int, arg2: c_ulong, arg3: c_ulong, arg4: c_ulong, arg5: c_ulong) -> c_int;
     fn geteuid() -> u32;

@@ -9,7 +9,7 @@
 mod caps;
 
 use std::env;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode};
 
 const PROG: &str = "runupdate";
@@ -147,12 +147,25 @@ fn setup_caps() -> ExitCode {
         );
     }
 
+    // Restrict the binary to the invoking user *before* granting capabilities:
+    // chown/chmod strip the security.capability xattr, so they must run first or
+    // they would wipe the caps set by setcap.
+    let (uid, gid) = target_owner();
+    if let Err(e) = restrict_to_owner(&exe, uid, gid) {
+        eprintln!("{PROG}: failed to restrict ownership/permissions of {}: {e}", exe.display());
+        return ExitCode::FAILURE;
+    }
+    println!(
+        "Restricting {} to uid {uid} (mode 0700), so only that user can run it.",
+        exe.display()
+    );
+
     println!("Granting capabilities to {}:", exe.display());
     println!("  {spec}");
 
     match Command::new("setcap").arg(&spec).arg(&exe).status() {
         Ok(status) if status.success() => {
-            println!("\nDone. You can now run `{PROG}` without sudo.");
+            println!("\nDone. Only uid {uid} can now run `{PROG}` without sudo.");
             ExitCode::SUCCESS
         }
         Ok(status) => {
@@ -220,6 +233,33 @@ fn current_exe() -> std::io::Result<PathBuf> {
     exe.canonicalize().or(Ok(exe))
 }
 
+/// The (uid, gid) that should own the binary after `setup`: the user who
+/// invoked `sudo runupdate setup`, taken from `SUDO_UID`/`SUDO_GID`, falling
+/// back to this process's real uid/gid when not run via sudo (e.g. a direct
+/// root shell, in which case the binary stays owned by root).
+fn target_owner() -> (u32, u32) {
+    let (ruid, rgid) = caps::real_ids();
+    let uid = env::var("SUDO_UID")
+        .ok()
+        .and_then(|s| s.trim().parse().ok())
+        .unwrap_or(ruid);
+    let gid = env::var("SUDO_GID")
+        .ok()
+        .and_then(|s| s.trim().parse().ok())
+        .unwrap_or(rgid);
+    (uid, gid)
+}
+
+/// Give the binary sole ownership by `uid`:`gid` and mode `0700`, so that only
+/// that user (or root) can execute — and therefore only that user can use the
+/// granted capabilities to run updates without sudo.
+fn restrict_to_owner(exe: &Path, uid: u32, gid: u32) -> std::io::Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+    std::os::unix::fs::chown(exe, Some(uid), Some(gid))?;
+    std::fs::set_permissions(exe, std::fs::Permissions::from_mode(0o700))?;
+    Ok(())
+}
+
 fn print_help() {
     println!(
         "\
@@ -255,6 +295,11 @@ HOW IT WORKS:
     At run time the tool uses those capabilities to switch its UID/GID to 0 and
     then runs the update commands as real root. This lets an unprivileged user
     run updates without sudo, while `teardown` removes the grant again.
+
+    Because that capability grant is a path to root, `setup` also chowns the
+    binary to the invoking user (from SUDO_UID, or root if not run via sudo) and
+    sets its mode to 0700, so only that user can execute it. Anyone else must
+    use sudo.
 
 NOTES:
     * `setup`/`teardown` require root because changing file capabilities needs

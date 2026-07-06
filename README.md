@@ -54,14 +54,30 @@ $ runupdate                # thereafter, no sudo needed
 Both `setup` and `teardown` require root, because changing a file's
 capabilities needs `CAP_SETFCAP`.
 
+### Restricting who can use it
+
+Since the capability grant is a path to root, `setup` also locks the binary
+down to the user who ran it: it `chown`s the file to that user (from `SUDO_UID`,
+or root when not run via sudo) and sets its mode to `0700`. So only that user
+can execute it — anyone else must go through sudo:
+
+```console
+$ sudo runupdate setup      # run as alice via sudo
+$ runupdate                 # alice: works, no sudo
+$ # bob: "Permission denied"
+```
+
+(The `chown`/`chmod` happen before `setcap`, because changing a file's owner or
+mode clears its capability xattr.)
+
 ### Capabilities granted
 
 `cap_setuid`, `cap_setgid`.
 
 That is deliberately minimal. `CAP_SETUID` is enough to become root, so a
-binary that has been through `setup` should be treated as privileged — anyone
-who can execute it can obtain root. Run `teardown` to revoke the grant when you
-no longer need passwordless updates.
+binary that has been through `setup` should be treated as privileged — the
+owning user can obtain root through it. Run `teardown` to revoke the grant when
+you no longer need passwordless updates.
 
 ### Environment awareness
 

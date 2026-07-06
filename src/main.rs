@@ -49,18 +49,19 @@ fn main() -> ExitCode {
     }
 }
 
-/// Default mode: raise ambient capabilities (a no-op harmless failure when the
-/// binary has none) and run each update command, streaming its output and
-/// reporting a summary.
+/// Default mode: elevate to root using the granted capabilities (if any) and
+/// run each update command, streaming its output and reporting a summary.
 fn run_updates() -> ExitCode {
-    let root = caps::is_root();
-    let raised = caps::raise_ambient();
+    // apt/dpkg/snap require a real root UID, so use the granted CAP_SETUID/
+    // CAP_SETGID to become root before running them.
+    let elevated = caps::become_root();
 
-    if raised == 0 && !root {
+    if !elevated {
         eprintln!(
-            "{PROG}: note: no update capabilities are active. The commands below \
-             will likely fail with permission errors.\n      Run `sudo {PROG} setup` \
-             once to grant the required capabilities, or run this tool with sudo.\n"
+            "{PROG}: note: not running as root and unable to become root. The \
+             commands below will likely fail with permission errors.\n      Run \
+             `sudo {PROG} setup` once to grant the required capabilities, or run \
+             this tool with sudo.\n"
         );
     }
 
@@ -179,9 +180,6 @@ fn teardown_caps() -> ExitCode {
         return ExitCode::FAILURE;
     }
 
-    // Also drop any ambient capabilities this process may hold, for tidiness.
-    caps::clear_ambient();
-
     let exe = match current_exe() {
         Ok(p) => p,
         Err(e) => {
@@ -236,8 +234,8 @@ USAGE:
                           apt upgrade -y
                           apt autoremove -y
 
-    {PROG} setup        Grant this binary the Linux capabilities the update
-                        commands require, so it can run them without sudo.
+    {PROG} setup        Grant this binary the capabilities it needs to run the
+                        update commands without sudo (see HOW IT WORKS).
                         Must be run as root (e.g. `sudo {PROG} setup`).
 
     {PROG} teardown     Remove those capabilities again. Must be run as root
@@ -247,19 +245,23 @@ USAGE:
     {PROG} --version    Show version information.
 
 HOW IT WORKS:
-    `setup` uses setcap(8) to add the required capabilities to this binary in
-    the permitted+inheritable+effective sets. At run time the tool raises them
-    into the ambient set so the snap/apt child processes inherit them across
-    exec. This lets an unprivileged user run updates without full root.
+    apt/dpkg and snap do not honour Linux capabilities: dpkg refuses to modify
+    the system unless the effective UID is 0, and snap authenticates the
+    caller's UID with snapd/polkit. They require a real root UID, not a set of
+    capabilities.
 
-    The capabilities granted are:
+    So `setup` uses setcap(8) to grant this binary just:
         {caps}
+    At run time the tool uses those capabilities to switch its UID/GID to 0 and
+    then runs the update commands as real root. This lets an unprivileged user
+    run updates without sudo, while `teardown` removes the grant again.
 
 NOTES:
     * `setup`/`teardown` require root because changing file capabilities needs
       CAP_SETFCAP.
-    * Package management is inherently powerful; the granted capability set is
-      broad by necessity. Use `teardown` to revoke it when no longer needed.
+    * CAP_SETUID lets this binary become root on demand, so treat a binary that
+      has been through `setup` as privileged. Use `teardown` to revoke it when
+      no longer needed.
     * If neither setup nor sudo is used, the update commands will simply fail
       with permission errors.
 ",

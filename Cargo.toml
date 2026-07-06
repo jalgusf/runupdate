@@ -1,0 +1,14 @@
+[package]
+name = "runupdate"
+version = "0.1.0"
+edition = "2021"
+description = "Run system update commands (snap/apt), optionally via file capabilities instead of sudo"
+license = "MIT"
+
+[[bin]]
+name = "runupdate"
+path = "src/main.rs"
+
+[profile.release]
+strip = true
+lto = true

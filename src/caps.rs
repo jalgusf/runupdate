@@ -39,6 +39,8 @@ const PR_CAPBSET_READ: c_int = 23;
 extern "C" {
     fn prctl(option: c_int, arg2: c_ulong, arg3: c_ulong, arg4: c_ulong, arg5: c_ulong) -> c_int;
     fn geteuid() -> u32;
+    fn getuid() -> u32;
+    fn getgid() -> u32;
     fn setuid(uid: u32) -> c_int;
     fn setgid(gid: u32) -> c_int;
     fn setgroups(size: usize, list: *const u32) -> c_int;
@@ -48,6 +50,12 @@ extern "C" {
 pub fn is_root() -> bool {
     // Safe: `geteuid` has no preconditions and cannot fail.
     unsafe { geteuid() == 0 }
+}
+
+/// The process's real UID and GID.
+pub fn real_ids() -> (u32, u32) {
+    // Safe: `getuid`/`getgid` have no preconditions and cannot fail.
+    unsafe { (getuid(), getgid()) }
 }
 
 /// Whether a capability is present in this process's bounding set.

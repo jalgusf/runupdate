@@ -19,6 +19,7 @@ const VERSION: &str = env!("CARGO_PKG_VERSION");
 /// Each entry is (program, args, required?). Non-required commands (snap) are
 /// skipped with a note when the program is not installed.
 const UPDATE_COMMANDS: &[(&str, &[&str], bool)] = &[
+    ("snap", &["refresh", "--list"], false),
     ("snap", &["refresh"], false),
     ("apt", &["update"], true),
     ("apt", &["upgrade", "-y"], true),

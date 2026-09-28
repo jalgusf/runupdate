@@ -7,6 +7,7 @@ Linux capabilities the package managers actually need.
 ## What it does
 
 ```
+snap refresh --list
 snap refresh
 apt update
 apt upgrade -y
@@ -14,8 +15,14 @@ apt autoremove -y
 ```
 
 It runs these in order, streams their output live, and prints a summary,
-exiting non-zero if any required command failed. `snap` is skipped (not treated
-as an error) when it is not installed.
+exiting non-zero if any required command failed. `snap refresh --list` comes
+first so you get an immediate overview of the snaps that will be updated. Both
+`snap` steps are skipped (not treated as an error) when `snap` is not installed;
+the `apt` steps are required.
+
+If the tool is neither running as root nor able to become root (see below), it
+prints a note and still runs the commands, which will then most likely fail with
+permission errors.
 
 ## Usage
 
@@ -26,6 +33,10 @@ runupdate teardown     Remove those capabilities again (needs root).
 runupdate --help       Show help.
 runupdate --version    Show the version.
 ```
+
+Aliases: `--setup` for `setup`; `--teardown`, `remove` and `--remove` for
+`teardown`; `-h` and `help` for `--help`; `-V` and `version` for `--version`.
+Any other argument prints an error and the help text, and exits non-zero.
 
 ## The capability modes
 
@@ -94,7 +105,7 @@ $ cargo build --release
 ```
 
 The tool has **no third-party dependencies** — it talks to the kernel via a few
-libc calls (`prctl`, `setuid`/`setgid`) and shells out to the system `setcap`
+libc calls (`prctl`, `setgroups`, `setuid`/`setgid`) and shells out to the system `setcap`
 for the privileged parts (install it with `apt install libcap2-bin` if
 missing).
 
